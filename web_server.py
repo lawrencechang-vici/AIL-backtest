@@ -31,6 +31,8 @@ REMOTE_PERIOD = "d"
 REMOTE_TIMEOUT = 30.0
 COMPANY_LIST_70_PATH = Path('company_list_70.csv')
 
+REMOTE_UI_BASE = "http://172.23.22.100:8499/backtest"
+
 WINDOW_CHOICES = ["custom", "1d", "1w", "1m", "3m", "6m", "1y", "3y", "5y", "10y", "max"]
 WINDOW_LABELS = {
     "custom": "Custom",
@@ -173,7 +175,11 @@ def build_preset_portfolios(available: Sequence[str]) -> list[tuple[str, str, li
     presets: list[tuple[str, str, list[str]]] = []
 
     if available_upper:
-        presets.append(("single", "Single Company", [available_upper[0]]))
+        presets.append(("single", "Single Company (first)", [available_upper[0]]))
+
+    for ticker in ["NVDA", "TSLA", "BOOT"]:
+        if ticker in available_set:
+            presets.append((f"single_{ticker.lower()}", f"Single - {ticker}", [ticker]))
 
     if len(available_upper) >= 5:
         presets.append(("small", "Small Portfolio (5 tickers)", available_upper[:5]))
@@ -275,6 +281,28 @@ CONTROL_CSS = """
         align-items: center;
         gap: 10px;
         font-size: 0.9rem;
+    }
+    .control-actions {
+        margin-bottom: 16px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+    }
+    .external-link {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 18px;
+        border-radius: 12px;
+        text-decoration: none;
+        font-weight: 600;
+        background: rgba(58, 128, 233, 0.2);
+        border: 1px solid rgba(58, 128, 233, 0.5);
+        color: #e0e6ed;
+    }
+    .external-link:hover {
+        background: rgba(58, 128, 233, 0.35);
+        border-color: rgba(58, 128, 233, 0.8);
     }
     .control-panel button {
         padding: 12px 20px;
@@ -380,6 +408,12 @@ def index() -> str:
     end_display = end_effective or DEFAULT_END
     checked_attr = 'checked' if skip_remote else ''
 
+    if tickers:
+        tickers_query = ','.join(tickers)
+        remote_url = f"{REMOTE_UI_BASE}?tickers={tickers_query}&start={start_display}&end={end_display}"
+    else:
+        remote_url = REMOTE_UI_BASE
+
     window_options = []
     for value in WINDOW_CHOICES:
         label = WINDOW_LABELS[value]
@@ -396,6 +430,9 @@ def index() -> str:
     controls = [
         "<section class='control-panel'>",
         "<h2>Backtest Controls</h2>",
+        "<div class='control-actions'>",
+        f"<a id='remote-link' data-base='{html.escape(REMOTE_UI_BASE)}' class='external-link' href='{html.escape(remote_url)}' target='_blank' rel='noopener'>Open Remote Platform</a>",
+        "</div>",
         "<form method='get'>",
         "<div>",
         "<label for='preset'>Preset Portfolio</label>",
@@ -437,6 +474,118 @@ def index() -> str:
 
     controls.append("</section>")
     controls_html = '\n'.join(controls)
+    script = """<script>
+(function(){
+  const link = document.getElementById('remote-link');
+  if (!link) return;
+  const base = link.dataset.base || link.href;
+  const tickersInput = document.getElementById('tickers');
+  const startInput = document.getElementById('start');
+  const endInput = document.getElementById('end');
+  const windowSelect = document.getElementById('window');
+  const presetSelect = document.getElementById('preset');
+
+  function formatDate(date){
+    const tzOffset = date.getTimezoneOffset();
+    const local = new Date(date.getTime() - tzOffset * 60000);
+    return local.toISOString().slice(0, 10);
+  }
+
+  function applyWindow(){
+    if (!windowSelect || !endInput || !startInput) return;
+    const endVal = endInput.value ? new Date(endInput.value + 'T00:00:00') : new Date();
+    if (!endInput.value) endInput.value = formatDate(endVal);
+    let startDate = null;
+    switch(windowSelect.value){
+      case '1d':
+        startDate = endVal;
+        break;
+      case '1w':
+        startDate = new Date(endVal);
+        startDate.setDate(startDate.getDate() - 6);
+        break;
+      case '1m':
+        startDate = new Date(endVal);
+        startDate.setMonth(startDate.getMonth() - 1);
+        break;
+      case '3m':
+        startDate = new Date(endVal);
+        startDate.setMonth(startDate.getMonth() - 3);
+        break;
+      case '6m':
+        startDate = new Date(endVal);
+        startDate.setMonth(startDate.getMonth() - 6);
+        break;
+      case '1y':
+        startDate = new Date(endVal);
+        startDate.setFullYear(startDate.getFullYear() - 1);
+        break;
+      case '3y':
+        startDate = new Date(endVal);
+        startDate.setFullYear(startDate.getFullYear() - 3);
+        break;
+      case '5y':
+        startDate = new Date(endVal);
+        startDate.setFullYear(startDate.getFullYear() - 5);
+        break;
+      case '10y':
+        startDate = new Date(endVal);
+        startDate.setFullYear(startDate.getFullYear() - 10);
+        break;
+      case 'max':
+        startDate = new Date('1970-01-01T00:00:00Z');
+        break;
+      default:
+        startDate = null;
+    }
+    if (startDate) startInput.value = formatDate(startDate);
+  }
+
+  function updateLink(){
+    if (!link) return;
+    const tickers = (tickersInput && tickersInput.value || '').replace(/\s+/g, '');
+    const start = startInput ? startInput.value : '';
+    const end = endInput ? endInput.value : '';
+    const params = new URLSearchParams();
+    if (tickers) params.set('tickers', tickers);
+    if (start) params.set('start', start);
+    if (end) params.set('end', end);
+    const query = params.toString();
+    link.href = query ? `${base}?${query}` : base;
+  }
+
+  if (windowSelect) {
+    windowSelect.addEventListener('change', () => {
+      if (windowSelect.value !== 'custom') {
+        applyWindow();
+      }
+      updateLink();
+    });
+  }
+
+  [tickersInput, startInput, endInput].forEach(el => {
+    if (el) el.addEventListener('input', updateLink);
+  });
+
+  if (presetSelect) {
+    presetSelect.addEventListener('change', () => {
+      setTimeout(() => {
+        if (windowSelect && windowSelect.value !== 'custom') {
+          applyWindow();
+        }
+        updateLink();
+      }, 0);
+    });
+  }
+
+  if (windowSelect && windowSelect.value !== 'custom') {
+    applyWindow();
+  }
+  updateLink();
+})();
+</script>"""
+
+    controls_html = controls_html + '\n' + script
 
     return _inject_controls(report_html, controls_html)
 
