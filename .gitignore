@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+*.pyc
+remote_app.js
+temp_remote.html
+
