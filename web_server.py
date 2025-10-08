@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import html
+import re
 from pathlib import Path
+from urllib.parse import urlencode
 from typing import Sequence
 
 import pandas as pd
@@ -18,6 +20,7 @@ from run_backtest import (
     collect_available_tickers,
     default_company_list_path,
     parse_ticker_selection,
+    parse_weight_entries,
     read_company_list,
     safe_console_text,
 )
@@ -56,6 +59,7 @@ def _execute_backtest(
     start: str,
     end: str,
     skip_remote: bool,
+    weights: dict[str, float] | None = None,
 ) -> tuple[str, str | None]:
     config = BacktestConfig(
         tickers=list(tickers),
@@ -64,6 +68,7 @@ def _execute_backtest(
         initial_capital=1_000_000.0,
         risk_free_rate=0.0,
         data_dir=str(DATA_DIR),
+        weights=weights,
     )
 
     engine = BacktestEngine(config)
@@ -165,6 +170,7 @@ def load_company_list_70_tickers() -> list[str]:
     return []
 
 
+
 def build_preset_portfolios(available: Sequence[str]) -> list[tuple[str, str, list[str]]]:
     available_upper = [ticker.upper() for ticker in available]
     available_set = set(available_upper)
@@ -173,9 +179,6 @@ def build_preset_portfolios(available: Sequence[str]) -> list[tuple[str, str, li
         return [ticker for ticker in tickers if ticker in available_set]
 
     presets: list[tuple[str, str, list[str]]] = []
-
-    if available_upper:
-        presets.append(("single", "Single Company (first)", [available_upper[0]]))
 
     for ticker in ["NVDA", "TSLA", "BOOT"]:
         if ticker in available_set:
@@ -196,44 +199,6 @@ def build_preset_portfolios(available: Sequence[str]) -> list[tuple[str, str, li
 
     return presets
 
-
-    window = (window or "custom").lower()
-    if end is None:
-        raise ValueError("End date is required when applying a date window.")
-    end_ts = pd.Timestamp(end)
-
-    if window == "custom":
-        if not start:
-            raise ValueError("Start date is required when window is 'custom'.")
-        return pd.Timestamp(start).strftime('%Y-%m-%d'), end_ts.strftime('%Y-%m-%d')
-
-    if window == "1d":
-        start_ts = end_ts
-    elif window == "1w":
-        start_ts = end_ts - pd.Timedelta(days=6)
-    elif window == "1m":
-        start_ts = end_ts - pd.DateOffset(months=1)
-    elif window == "3m":
-        start_ts = end_ts - pd.DateOffset(months=3)
-    elif window == "6m":
-        start_ts = end_ts - pd.DateOffset(months=6)
-    elif window == "1y":
-        start_ts = end_ts - pd.DateOffset(years=1)
-    elif window == "3y":
-        start_ts = end_ts - pd.DateOffset(years=3)
-    elif window == "5y":
-        start_ts = end_ts - pd.DateOffset(years=5)
-    elif window == "10y":
-        start_ts = end_ts - pd.DateOffset(years=10)
-    elif window == "max":
-        start_ts = pd.Timestamp('1970-01-01')
-    else:
-        raise ValueError(f"Unsupported window value: {window}")
-
-    if start_ts > end_ts:
-        start_ts = end_ts
-
-    return start_ts.strftime('%Y-%m-%d'), end_ts.strftime('%Y-%m-%d')
 
 
 CONTROL_CSS = """
@@ -282,28 +247,6 @@ CONTROL_CSS = """
         gap: 10px;
         font-size: 0.9rem;
     }
-    .control-actions {
-        margin-bottom: 16px;
-        display: flex;
-        flex-wrap: wrap;
-        gap: 12px;
-    }
-    .external-link {
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-        padding: 10px 18px;
-        border-radius: 12px;
-        text-decoration: none;
-        font-weight: 600;
-        background: rgba(58, 128, 233, 0.2);
-        border: 1px solid rgba(58, 128, 233, 0.5);
-        color: #e0e6ed;
-    }
-    .external-link:hover {
-        background: rgba(58, 128, 233, 0.35);
-        border-color: rgba(58, 128, 233, 0.8);
-    }
     .control-panel button {
         padding: 12px 20px;
         border-radius: 12px;
@@ -321,6 +264,60 @@ CONTROL_CSS = """
         font-size: 0.75rem;
         color: var(--text-secondary);
         margin-top: 4px;
+    }
+    .mode-tabs {
+        display: inline-flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin: 8px 0 18px;
+    }
+    .mode-tabs .tab {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 8px 18px;
+        border-radius: 999px;
+        border: 1px solid rgba(58, 128, 233, 0.35);
+        background: rgba(58, 128, 233, 0.12);
+        color: #e0e6ed;
+        text-decoration: none;
+        font-weight: 600;
+        transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+    }
+    .mode-tabs .tab:hover {
+        background: rgba(58, 128, 233, 0.25);
+        border-color: rgba(58, 128, 233, 0.6);
+        color: #ffffff;
+    }
+    .mode-tabs .tab.active {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #ffffff;
+        cursor: default;
+    }
+    .control-actions {
+        margin-bottom: 18px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+    }
+    .external-link {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 18px;
+        border-radius: 12px;
+        text-decoration: none;
+        font-weight: 600;
+        background: rgba(58, 128, 233, 0.2);
+        border: 1px solid rgba(58, 128, 233, 0.45);
+        color: #e0e6ed;
+        transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+    }
+    .external-link:hover {
+        background: rgba(58, 128, 233, 0.35);
+        border-color: rgba(58, 128, 233, 0.8);
+        color: #ffffff;
     }
     .alert {
         margin-top: 12px;
@@ -348,26 +345,37 @@ def _inject_controls(report_html: str, controls: str) -> str:
     return report_html
 
 @app.route('/', methods=['GET'])
+
 def index() -> str:
     company_list = read_company_list(default_company_list_path())
     available = collect_available_tickers(DATA_DIR, company_list)
     presets = build_preset_portfolios(available)
     preset_map = {key: tickers for key, _, tickers in presets}
 
+    mode = request.args.get('mode', 'equal').lower()
+    if mode not in {'equal', 'weighted'}:
+        mode = 'equal'
+
     preset_param = request.args.get('preset', 'custom').lower()
     tickers_param = request.args.get('tickers', 'all')
+    weights_param = request.args.get('weights', '')
     start_param = request.args.get('start', DEFAULT_START)
     end_param = request.args.get('end', DEFAULT_END)
     window = request.args.get('window', 'custom').lower()
     skip_remote = request.args.get('skip_remote') == 'on'
 
     if preset_param != 'custom' and preset_param in preset_map:
-        tickers_param = ','.join(preset_map[preset_param])
+        preset_tickers = preset_map[preset_param]
+        tickers_param = ','.join(preset_tickers)
+        if mode == 'weighted' and preset_tickers:
+            equal_weight = 1.0 / len(preset_tickers)
+            weights_param = '\n'.join(f"{ticker}: {equal_weight:.4f}" for ticker in preset_tickers)
     else:
         preset_param = 'custom'
 
     error_message: str | None = None
     remote_message: str | None = None
+    weights_dict: dict[str, float] | None = None
 
     start_effective = start_param
     end_effective = end_param
@@ -385,6 +393,15 @@ def index() -> str:
             tickers_param = 'all'
             preset_param = 'custom'
 
+        if mode == 'weighted':
+            try:
+                weights_dict = parse_weight_entries(weights_param, tickers, available)
+                tickers = list(weights_dict.keys())
+                weights_param = '\n'.join(f"{ticker}: {weights_dict[ticker]:.6f}" for ticker in tickers)
+            except ValueError as exc:
+                error_message = safe_console_text(str(exc))
+                weights_dict = None
+
         try:
             start_effective, end_effective = resolve_window_dates(window, start_param, end_param)
         except ValueError as exc:
@@ -394,7 +411,13 @@ def index() -> str:
             end_effective = end_param or DEFAULT_END
 
         try:
-            report_html, remote_message = _execute_backtest(tickers, start_effective, end_effective, skip_remote)
+            report_html, remote_message = _execute_backtest(
+                tickers,
+                start_effective,
+                end_effective,
+                skip_remote,
+                weights_dict,
+            )
         except Exception as exc:
             error_message = safe_console_text(str(exc))
             fallback_path = Path('reports/AIL_backtest.html')
@@ -408,11 +431,56 @@ def index() -> str:
     end_display = end_effective or DEFAULT_END
     checked_attr = 'checked' if skip_remote else ''
 
+    weights_query: str | None = None
+    if mode == 'weighted':
+        if weights_dict:
+            weights_query = ','.join(f"{ticker}:{weights_dict[ticker]:.6f}" for ticker in tickers)
+        else:
+            raw_tokens = re.split(r'[\s,;]+', weights_param)
+            tokens = [
+                entry.strip().replace(' ', '')
+                for entry in raw_tokens
+                if entry.strip()
+            ]
+            if tokens:
+                weights_query = ','.join(tokens)
+
+    remote_params: dict[str, str] = {}
     if tickers:
-        tickers_query = ','.join(tickers)
-        remote_url = f"{REMOTE_UI_BASE}?tickers={tickers_query}&start={start_display}&end={end_display}"
-    else:
-        remote_url = REMOTE_UI_BASE
+        remote_params['tickers'] = ','.join(tickers)
+    if start_display:
+        remote_params['start'] = start_display
+    if end_display:
+        remote_params['end'] = end_display
+    if weights_query:
+        remote_params['mode'] = 'weighted'
+        remote_params['weights'] = weights_query
+    remote_url = REMOTE_UI_BASE
+    if remote_params:
+        remote_url = f"{REMOTE_UI_BASE}?{urlencode(remote_params)}"
+
+    base_params: dict[str, str] = {
+        'preset': preset_param,
+        'tickers': tickers_param,
+        'start': start_display,
+        'end': end_display,
+        'window': window,
+    }
+    if skip_remote:
+        base_params['skip_remote'] = 'on'
+    if mode == 'weighted' and weights_param.strip():
+        base_params['weights'] = weights_param
+
+    def build_mode_url(target_mode: str) -> str:
+        params = dict(base_params)
+        params['mode'] = target_mode
+        if target_mode != 'weighted':
+            params.pop('weights', None)
+        query = urlencode(params, doseq=True)
+        return f"?{query}" if query else f"?mode={target_mode}"
+
+    mode_equal_url = build_mode_url('equal')
+    mode_weighted_url = build_mode_url('weighted')
 
     window_options = []
     for value in WINDOW_CHOICES:
@@ -430,20 +498,37 @@ def index() -> str:
     controls = [
         "<section class='control-panel'>",
         "<h2>Backtest Controls</h2>",
+        "<div class='mode-tabs'>",
+        f"<a class='tab{' active' if mode == 'equal' else ''}' href='{html.escape(mode_equal_url)}'>Equal Weight</a>",
+        f"<a class='tab{' active' if mode == 'weighted' else ''}' href='{html.escape(mode_weighted_url)}'>Custom Weights</a>",
+        "</div>",
         "<div class='control-actions'>",
         f"<a id='remote-link' data-base='{html.escape(REMOTE_UI_BASE)}' class='external-link' href='{html.escape(remote_url)}' target='_blank' rel='noopener'>Open Remote Platform</a>",
         "</div>",
         "<form method='get'>",
+        f"<input type='hidden' name='mode' value='{html.escape(mode)}'>",
         "<div>",
         "<label for='preset'>Preset Portfolio</label>",
         f"<select id='preset' name='preset'>{''.join(preset_options)}</select>",
-        "<p class='helper'>Choose a preset to auto-fill tickers, or stay on Custom to edit manually.</p>",
+        "<p class='helper'>Choose a preset or stay on Custom to edit manually.</p>",
         "</div>",
         "<div>",
         "<label for='tickers'>Tickers</label>",
         f"<textarea id='tickers' name='tickers' placeholder='e.g. NVDA,AAPL,MSFT'>{html.escape(tickers_param)}</textarea>",
         "<p class='helper'>Use comma separated symbols, '@file.txt', or 'all'.</p>",
         "</div>",
+    ]
+
+    if mode == 'weighted':
+        controls.extend([
+            "<div>",
+            "<label for='weights'>Weights (Ticker: Weight)</label>",
+            f"<textarea id='weights' name='weights' placeholder='e.g. NVDA:0.6,TSLA:0.4'>{html.escape(weights_param)}</textarea>",
+            "<p class='helper'>Leave blank to assign equal weights to the listed tickers.</p>",
+            "</div>",
+        ])
+
+    controls.extend([
         "<div>",
         "<label for='window'>Date Window</label>",
         f"<select id='window' name='window'>{''.join(window_options)}</select>",
@@ -465,7 +550,7 @@ def index() -> str:
         "<button type='submit'>Run Backtest</button>",
         "</div>",
         "</form>",
-    ]
+    ])
 
     if error_message:
         controls.append(f"<div class='alert error'>{html.escape(error_message)}</div>")
@@ -474,16 +559,18 @@ def index() -> str:
 
     controls.append("</section>")
     controls_html = '\n'.join(controls)
-    script = """<script>
+    script = r"""<script>
 (function(){
   const link = document.getElementById('remote-link');
   if (!link) return;
   const base = link.dataset.base || link.href;
   const tickersInput = document.getElementById('tickers');
+  const weightsInput = document.getElementById('weights');
   const startInput = document.getElementById('start');
   const endInput = document.getElementById('end');
   const windowSelect = document.getElementById('window');
   const presetSelect = document.getElementById('preset');
+  const modeInput = document.querySelector("input[name='mode']");
 
   function formatDate(date){
     const tzOffset = date.getTimezoneOffset();
@@ -541,15 +628,31 @@ def index() -> str:
     if (startDate) startInput.value = formatDate(startDate);
   }
 
+  function normalizeWeights(raw){
+    if (!raw) return '';
+    return raw
+      .split(/[\n,]+/)
+      .map(part => part.trim())
+      .filter(Boolean)
+      .map(entry => entry.replace(/\s+/g, ''))
+      .join(',');
+  }
+
   function updateLink(){
-    if (!link) return;
-    const tickers = (tickersInput && tickersInput.value || '').replace(/\s+/g, '');
+    const tickersRaw = tickersInput ? tickersInput.value : '';
+    const tickers = tickersRaw ? tickersRaw.replace(/\s+/g, '') : '';
     const start = startInput ? startInput.value : '';
     const end = endInput ? endInput.value : '';
     const params = new URLSearchParams();
     if (tickers) params.set('tickers', tickers);
     if (start) params.set('start', start);
     if (end) params.set('end', end);
+    const mode = modeInput ? modeInput.value : 'equal';
+    if (mode === 'weighted') {
+      params.set('mode', 'weighted');
+      const weights = weightsInput ? normalizeWeights(weightsInput.value) : '';
+      if (weights) params.set('weights', weights);
+    }
     const query = params.toString();
     link.href = query ? `${base}?${query}` : base;
   }
@@ -563,7 +666,7 @@ def index() -> str:
     });
   }
 
-  [tickersInput, startInput, endInput].forEach(el => {
+  [tickersInput, startInput, endInput, weightsInput].forEach(el => {
     if (el) el.addEventListener('input', updateLink);
   });
 
@@ -589,6 +692,11 @@ def index() -> str:
 
     return _inject_controls(report_html, controls_html)
 
-
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
+
+
+
+
+
+

@@ -284,12 +284,11 @@ class BacktestEngine:
     def _sharpe_ratio(self, daily_returns: pd.Series) -> float:
         if daily_returns.empty:
             return 0.0
-        rf_daily = (1.0 + self.config.risk_free_rate) ** (1.0 / TRADING_DAYS_PER_YEAR) - 1.0
-        excess = daily_returns - rf_daily
-        std = excess.std(ddof=1)
+        mean = daily_returns.mean()
+        std = daily_returns.std(ddof=1)
         if std == 0:
             return 0.0
-        return excess.mean() / std * np.sqrt(TRADING_DAYS_PER_YEAR)
+        return (mean * TRADING_DAYS_PER_YEAR) / (std * np.sqrt(TRADING_DAYS_PER_YEAR))
 
     def _sortino_ratio(self, daily_returns: pd.Series) -> float:
         if daily_returns.empty:

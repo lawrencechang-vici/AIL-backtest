@@ -4,7 +4,7 @@ import argparse
 import math
 import sys
 from pathlib import Path
-from typing import Iterable, List, Optional, Sequence
+from typing import Dict, Iterable, List, Optional, Sequence
 
 import pandas as pd
 
@@ -90,6 +90,67 @@ def _validate_selection(selection: Iterable[str], available: Sequence[str]) -> L
     if not unique_ordered:
         raise ValueError("No valid tickers were selected.")
     return unique_ordered
+
+
+def parse_weight_entries(
+    raw: str | None,
+    base_tickers: Sequence[str],
+    available: Sequence[str],
+) -> Dict[str, float]:
+    available_set = {ticker.upper() for ticker in available}
+    base_upper = [ticker.upper() for ticker in base_tickers]
+
+    entries: Dict[str, float] = {}
+    if raw is None or not raw.strip():
+        if not base_upper:
+            raise ValueError("Provide tickers or weight entries for custom weights.")
+        entries = {ticker: 1.0 for ticker in base_upper if ticker in available_set}
+        if not entries:
+            raise ValueError("None of the provided tickers are available in the data directory.")
+    else:
+        source = raw.strip()
+        if source.startswith('@'):
+            path_ref = Path(source[1:].strip())
+            if not path_ref.exists():
+                raise FileNotFoundError(f"Weight list file not found: {path_ref}")
+            try:
+                source = path_ref.read_text(encoding='utf-8')
+            except UnicodeDecodeError:
+                source = path_ref.read_text(encoding='utf-8-sig')
+        tokens: list[str] = []
+        normalized = (
+            source.replace('\r\n', ',')
+            .replace('\n', ',')
+            .replace('\r', ',')
+            .replace(';', ',')
+        )
+        for part in normalized.split(','):
+            token = part.strip()
+            if token:
+                tokens.append(token)
+        if not tokens:
+            raise ValueError("Weights input is empty.")
+        for token in tokens:
+            if ':' not in token:
+                raise ValueError(f"Weight entry '{token}' must be in TICKER:VALUE format.")
+            name, value_str = token.split(':', 1)
+            ticker = name.strip().upper()
+            if ticker not in available_set:
+                raise ValueError(f"Ticker '{ticker}' is not available in data directory.")
+            try:
+                weight_val = float(value_str.strip())
+            except ValueError as exc:
+                raise ValueError(f"Weight for '{ticker}' is not numeric.") from exc
+            if weight_val <= 0:
+                raise ValueError(f"Weight for '{ticker}' must be positive.")
+            entries[ticker] = weight_val
+        if not entries:
+            raise ValueError("Weights input is empty.")
+
+    total = sum(entries.values())
+    if total <= 0:
+        raise ValueError("Weights must sum to a positive value.")
+    return {ticker: value / total for ticker, value in entries.items()}
 
 
 def format_metric_value(key: str, value: Optional[float]) -> str:
@@ -206,9 +267,15 @@ def run_interactive_wizard(args, available: Sequence[str]) -> None:
         else:
             print(f"Unrecognized window '{raw_window}', keeping {args.window}.")
 
+    print("Provide custom weights as TICKER:VALUE pairs (comma or newline separated). Leave blank for equal weights.")
+    default_weights = args.weights or 'equal weights'
+    raw_weights = input(f"Custom weights [{default_weights}]: ").strip()
+    if raw_weights:
+        args.weights = raw_weights
+
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run an equal-weight buy-and-hold backtest.")
+    parser = argparse.ArgumentParser(description="Run a buy-and-hold backtest with equal or custom weights.")
     parser.add_argument(
         "--start",
         required=True,
@@ -223,6 +290,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--tickers",
         default='all',
         help="Ticker selection. Use comma-separated symbols, '@file.txt' to read from file, or 'all' (default).",
+    )
+    parser.add_argument(
+        "--weights",
+        help="Custom weights as comma-separated 'TICKER:VALUE' pairs, '@file.txt', or leave unset for equal weights.",
     )
     parser.add_argument(
         "--window",
@@ -322,6 +393,14 @@ def main() -> None:
 
     tickers = parse_ticker_selection(args.tickers, available)
 
+    weights_dict: Optional[Dict[str, float]] = None
+    if args.weights is not None:
+        try:
+            weights_dict = parse_weight_entries(args.weights, tickers, available)
+        except (FileNotFoundError, ValueError) as exc:
+            raise SystemExit(safe_console_text(str(exc)))
+        tickers = list(weights_dict.keys())
+
     try:
         args.start, args.end = resolve_window_dates(args.window, args.start, args.end)
     except ValueError as exc:
@@ -337,7 +416,13 @@ def main() -> None:
         initial_capital=args.initial_capital,
         risk_free_rate=args.risk_free_rate,
         data_dir=str(data_dir),
+        weights=weights_dict,
     )
+
+    if weights_dict:
+        print("Using custom weights:")
+        for ticker in tickers:
+            print(f"  {ticker}: {weights_dict[ticker]:.4f}")
 
     engine = BacktestEngine(config)
     result = engine.run()
